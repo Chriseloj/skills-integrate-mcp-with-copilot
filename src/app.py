@@ -5,11 +5,12 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 import os
 from pathlib import Path
+import json
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -18,6 +19,10 @@ app = FastAPI(title="Mergington High School API",
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+# Load teacher data
+with open(Path(__file__).parent.parent / "teachers.json") as f:
+    teachers = {teacher['username']: teacher for teacher in json.load(f)}
 
 # In-memory activity database
 activities = {
@@ -88,9 +93,48 @@ def get_activities():
     return activities
 
 
+@app.post("/login")
+async def login(request: Request):
+    """Login a teacher"""
+    try:
+        data = await request.json()
+        username = data.get("username")
+        password = data.get("password")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+
+    if not username or not password:
+        raise HTTPException(
+            status_code=400, detail="Username and password are required")
+
+    if username in teachers and teachers[username]["password"] == password:
+        request.session["user"] = username
+        return JSONResponse(content={"message": "Logged in successfully"})
+
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.get("/logout")
+def logout(request: Request):
+    """Logout a teacher"""
+    request.session.pop("user", None)
+    return JSONResponse(content={"message": "Logged out successfully"})
+
+
+@app.get("/user")
+def get_user(request: Request):
+    """Get the current user"""
+    user = request.session.get("user")
+    if user:
+        return {"user": user}
+    return {}
+
+
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(activity_name: str, email: str, request: Request):
     """Sign up a student for an activity"""
+    if not request.session.get("user"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -111,8 +155,10 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(activity_name: str, email: str, request: Request):
     """Unregister a student from an activity"""
+    if not request.session.get("user"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
